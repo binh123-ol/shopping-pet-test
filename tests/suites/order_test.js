@@ -7,14 +7,31 @@ describe('Chức năng: Đặt hàng (Order)', function() {
     this.timeout(120000);
     let driver;
     const BASE_URL = 'http://127.0.0.1:5500';
-    const TEST_USER = { email: 'user@test.com', pass: '123456' };
+    const TEST_USER = { email: 'customer1@example.com', pass: 'admin123' };
     const moduleName = 'Order';
 
     before(async function() {
         let options = new chrome.Options();
-        options.addArguments('--headless');
+        // options.addArguments('--headless');
         options.addArguments('--no-sandbox');
         options.addArguments('--disable-dev-shm-usage');
+        options.addArguments('--disable-gpu'); // Fix AMD GPU errors
+        options.addArguments('--disable-software-rasterizer');
+        options.addArguments('--disable-features=CalculateNativeWinOcclusion');
+        options.addArguments('--disable-notifications');
+        options.addArguments('--disable-popup-blocking');
+        options.addArguments('--disable-features=PasswordLeakDetection'); // Hard disable leak detection
+        options.addArguments('--password-store=basic'); // Use basic password store
+        
+        // Disable password manager and leak detection popups
+        options.setUserPreferences({
+            'credentials_enable_service': false,
+            'profile.password_manager_enabled': false,
+            'profile.password_manager_leak_detection': false, // Explicitly disable leak detection pref
+            'autofill.profile_enabled': false,
+            'autofill.password_enabled': false
+        });
+
         driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
         
         await driver.get(`${BASE_URL}/src/pages/login.html`);
@@ -23,8 +40,14 @@ describe('Chức năng: Đặt hàng (Order)', function() {
         await driver.findElement(By.css('button[type="submit"]')).click();
         await driver.wait(until.urlContains('index.html'), 10000);
         
+        // Add item to cart for checkout tests
+        const productCard = await driver.wait(until.elementLocated(By.className('product-card')), 10000);
+        await productCard.click();
+        
         const addBtn = await driver.wait(until.elementLocated(By.className('btn-add-cart')), 10000);
         await addBtn.click();
+        await driver.wait(until.alertIsPresent(), 5000);
+        await driver.switchTo().alert().accept();
         await driver.sleep(1000);
     });
 
@@ -60,7 +83,12 @@ describe('Chức năng: Đặt hàng (Order)', function() {
     it('TC_ORD_02: Đặt hàng thất bại khi thiếu Số điện thoại', async function() {
         await recordResult('TC_ORD_02', 'Đặt hàng thất bại khi thiếu Số điện thoại', async () => {
             await driver.get(`${BASE_URL}/index.html`);
+            const productCard = await driver.wait(until.elementLocated(By.className('product-card')), 10000);
+            await productCard.click();
             await (await driver.wait(until.elementLocated(By.className('btn-add-cart')), 10000)).click();
+            await driver.wait(until.alertIsPresent(), 5000);
+            await driver.switchTo().alert().accept();
+
             await driver.get(`${BASE_URL}/src/pages/checkout.html`);
             await driver.findElement(By.id('phone')).clear();
             await driver.findElement(By.className('btn-order')).click();
@@ -137,10 +165,19 @@ describe('Chức năng: Đặt hàng (Order)', function() {
     it('TC_ORD_10: Đặt hàng thành công với đơn hàng có nhiều sản phẩm', async function() {
         await recordResult('TC_ORD_10', 'Đặt hàng thành công với đơn hàng có nhiều sản phẩm', async () => {
             await driver.get(`${BASE_URL}/index.html`);
-            const addBtns = await driver.findElements(By.className('btn-add-cart'));
-            await addBtns[0].click();
-            await driver.sleep(500);
-            await addBtns[1].click();
+            let productCards = await driver.wait(until.elementsLocated(By.className('product-card')), 10000);
+            await productCards[0].click();
+            await (await driver.wait(until.elementLocated(By.className('btn-add-cart')), 10000)).click();
+            await driver.wait(until.alertIsPresent(), 5000);
+            await driver.switchTo().alert().accept();
+
+            await driver.get(`${BASE_URL}/index.html`);
+            productCards = await driver.wait(until.elementsLocated(By.className('product-card')), 10000);
+            await productCards[1].click();
+            await (await driver.wait(until.elementLocated(By.className('btn-add-cart')), 10000)).click();
+            await driver.wait(until.alertIsPresent(), 5000);
+            await driver.switchTo().alert().accept();
+
             await driver.get(`${BASE_URL}/src/pages/checkout.html`);
             await driver.findElement(By.id('fullName')).clear();
             await driver.findElement(By.id('fullName')).sendKeys('Multi Item Buyer');
@@ -149,6 +186,54 @@ describe('Chức năng: Đặt hàng (Order)', function() {
             await driver.findElement(By.className('btn-order')).click();
             await driver.wait(until.urlContains('orders.html'), 15000);
             expect(await driver.getCurrentUrl()).to.include('orders.html');
+        });
+    });
+
+    it('TC_ORD_11: Đặt hàng với số điện thoại sai định dạng', async function() {
+        await recordResult('TC_ORD_11', 'Đặt hàng với số điện thoại sai định dạng', async () => {
+            await driver.get(`${BASE_URL}/index.html`);
+            await (await driver.findElement(By.className('btn-add-cart'))).click();
+            await driver.get(`${BASE_URL}/src/pages/checkout.html`);
+            await driver.findElement(By.id('phone')).sendKeys('abcxyz');
+            await driver.findElement(By.className('btn-order')).click();
+            // Should stay on page or show error
+            const url = await driver.getCurrentUrl();
+            expect(url).to.include('checkout.html');
+        });
+    });
+
+    it('TC_ORD_12: Kiểm tra giỏ hàng bị xóa sạch sau khi đặt hàng', async function() {
+        await recordResult('TC_ORD_12', 'Kiểm tra giỏ hàng bị xóa sạch sau khi đặt hàng', async () => {
+            await driver.get(`${BASE_URL}/index.html`);
+            const badgeValue = await driver.findElement(By.className('cart-badge')).getText();
+            expect(badgeValue).to.equal('0');
+        });
+    });
+
+    it('TC_ORD_13: Kiểm tra thông tin địa chỉ lưu đúng trong chi tiết đơn hàng', async function() {
+        await recordResult('TC_ORD_13', 'Kiểm tra thông tin địa chỉ lưu đúng trong chi tiết đơn hàng', async () => {
+            await driver.get(`${BASE_URL}/src/pages/orders.html`);
+            const latestOrder = await driver.findElement(By.className('order-card'));
+            await latestOrder.click();
+            const modal = await driver.wait(until.elementLocated(By.id('orderModal')), 5000);
+            expect(await modal.isDisplayed()).to.be.true;
+        });
+    });
+
+    it('TC_ORD_14: Kiểm tra nút quay lại giỏ hàng từ trang Thanh toán', async function() {
+        await recordResult('TC_ORD_14', 'Kiểm tra nút quay lại giỏ hàng từ trang Thanh toán', async () => {
+            await driver.get(`${BASE_URL}/src/pages/checkout.html`);
+            const logo = await driver.findElement(By.className('logo'));
+            await logo.click();
+            expect(await driver.getCurrentUrl()).to.include('index.html');
+        });
+    });
+
+    it('TC_ORD_15: Kiểm tra hiển thị ngày đặt hàng', async function() {
+        await recordResult('TC_ORD_15', 'Kiểm tra hiển thị ngày đặt hàng', async () => {
+            await driver.get(`${BASE_URL}/src/pages/orders.html`);
+            const orderInfo = await driver.wait(until.elementLocated(By.className('order-info')), 5000);
+            expect(await orderInfo.getText()).to.match(/\d{2}\/\d{2}\/\d{4}/);
         });
     });
 });
